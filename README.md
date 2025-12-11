@@ -2,6 +2,10 @@
 
 A Tampermonkey userscript for [TagPro](https://tagpro.koalabeast.com) private groups that automatically uploads speedrun replays to the GLTP tracker and displays a WR HUD overlay.
 
+## Important Notes
+- The in‑game timer is **not perfectly accurate**. It is meant for live display only and is **not the source of truth** for GLTP speedruns.  
+- A margin of about **3 seconds** is applied when comparing your run time against the fastest recorded time to account for timing differences in the client.
+
 ## Features
 - **WR HUD overlay**: Shows current world record time and holder.
 - **Live timer**: Speedrun‑style timer during runs.
