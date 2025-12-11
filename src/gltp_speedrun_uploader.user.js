@@ -1,13 +1,17 @@
 // ==UserScript==
-// @name         GLTP Speedrun Uploader
+// @name         GLTP Speedrun Uploader + WR HUD overlay
 // @description  Upload private group speedrun replays to GLTP speedrun tracker + show WR HUD overlay
 // @include      https://*.koalabeast.com/game*
 // @include      https://*.koalabeast.com/game
 // @include      https://*.koalabeast.com/game?*
 // @grant        GM_xmlhttpRequest
 // @grant        GM_addStyle
+// @grant        GM_getValue
+// @grant        GM_setValue
+// @grant        GM_registerMenuCommand
+// @grant        GM_unregisterMenuCommand
 // @author       DAD.
-// @version      0.1
+// @version      1.0
 // ==/UserScript==
 
 /* globals tagpro, $, PIXI */
@@ -18,6 +22,54 @@
   "DefaultMap": { "type": "individual", "caps_to_win": 1 }
 } */
 
+// -------------------------
+// TOGGLE STATE
+// -------------------------
+const UPLOAD_ALL_DEFAULT = true;
+let toggleCommandId = null; // track the current menu command
+
+function shouldUploadRuns() {
+    return GM_getValue("uploadAll", UPLOAD_ALL_DEFAULT);
+}
+
+function updateUploadToggleHUD() {
+    const current = shouldUploadRuns();
+    const statusBox = $("#WR_HUD_status");
+    statusBox.find(".uploadToggle").remove();
+
+    const line = $("<div>").addClass("uploadToggle");
+    const icon = $("<span>").css({
+        display: "inline-block",
+        width: "12px",
+        height: "12px",
+        borderRadius: "50%",
+        marginRight: "6px",
+        backgroundColor: current ? "limegreen" : "red"
+    });
+    line.append(icon).append("Uploads: " + (current ? "ON" : "OFF"));
+    statusBox.prepend(line);
+}
+
+function registerToggleCommand() {
+    // Remove old command if it exists
+    if (toggleCommandId !== null) {
+        GM_unregisterMenuCommand(toggleCommandId);
+    }
+
+    const current = shouldUploadRuns();
+    toggleCommandId = GM_registerMenuCommand(
+        current ? "Disable Upload Runs" : "Enable Upload Runs",
+        () => {
+            GM_setValue("uploadAll", !current);
+            registerToggleCommand(); // refresh menu label
+            updateUploadToggleHUD(); // refresh HUD indicator
+        }
+    );
+}
+
+// Call once at script load
+registerToggleCommand();
+
 (function() {
     'use strict';
 
@@ -25,6 +77,44 @@
     let fastestTime = Infinity;
     let wrHolder = "Unknown";
     console.log("starting1");
+
+    function formatTime(ms) {
+        const hours = Math.floor(ms / 3600000);
+        const minutes = Math.floor((ms % 3600000) / 60000);
+        const seconds = Math.floor((ms % 60000) / 1000);
+        const milliseconds = ms % 1000;
+
+        if (hours > 0) {
+            const minutesStr = minutes.toString().padStart(2, '0');
+            const secondsStr = seconds.toString().padStart(2, '0');
+            const millisStr = milliseconds.toString().padStart(3, '0');
+            return `${hours}:${minutesStr}:${secondsStr}.${millisStr}`;
+        } else if (minutes > 0) {
+            const secondsStr = seconds.toString().padStart(2, '0');
+            const millisStr = milliseconds.toString().padStart(3, '0');
+            return `${minutes}:${secondsStr}.${millisStr}`;
+        } else {
+            const millisStr = milliseconds.toString().padStart(3, '0');
+            return `${seconds}.${millisStr}`;
+        }
+    }
+
+    function log(level, msg, data) {
+        const ts = new Date().toISOString();
+        if (data !== undefined) {
+            console[level](`[${ts}] ${msg}`, data);
+        } else {
+            console[level](`[${ts}] ${msg}`);
+        }
+    }
+
+    function isReplayMode() {
+        return window.location.search.includes("replay=") || !!tagpro.replayData;
+    }
+
+    function isActivePlayer() {
+        return tagpro.spectator === false;
+    }
 
     function fetchJSON(url) {
         return new Promise((resolve, reject) => {
@@ -49,7 +139,7 @@
     // -------------------------
     async function loadConfigs() {
         const maps = await fetchJSON("https://bambitp.github.io/GLTP/map_metadata.json");
-        const wrs  = await fetchJSON("https://gltp.fwotagprodad.workers.dev/wrs");
+        const wrs = await fetchJSON("https://gltp.fwotagprodad.workers.dev/wrs");
 
         for (const id in maps) {
             if (wrs[id]) {
@@ -78,21 +168,16 @@
 
 
     function isSpeedrunMap() {
-        console.log("isspeedrunmap");
         const id = getCurrentMapId();
-        console.log(id);
-        console.log(mapConfig);
         return id && !!mapConfig[id];
     }
 
     function getMapRequirement() {
-        console.log("getrequirement");
         const id = getCurrentMapId();
-        return mapConfig[id] || { completion_type: "individual", caps_to_win: "1" };
+        return mapConfig[id] || { completion_type: "individual", caps_to_win: "1", allow_blue_caps: false };
     }
 
     function getFastestTime() {
-        console.log("getfastesttime");
         const id = getCurrentMapId();
         const entry = mapConfig[id];
         return entry ? { fastestTime: entry.fastestTime, player: entry.player } 
@@ -103,22 +188,34 @@
     // -------------------------
     // UPLOAD REPLAY
     // -------------------------
-    function getReplayUUID() {
-        console.log("getReplay");        
+    function getReplayUUID() {        
         try {
             if (tagpro.clientInfo && tagpro.clientInfo.gameUuid) {
                 return tagpro.clientInfo.gameUuid;
             }
             // Nothing found
-            console.error("Replay UUID not found:", e);
+            log("error", "Replay UUID not found");
             return null;
         } catch (e) {
-            console.error("Replay UUID not found:", e);
+            log("error", "Replay UUID not found", e);
             return null;
         }
     }
 
     async function uploadReplay(uuid, runTime) {
+        if (isReplayMode()) {
+            updateOverlayStatus("ℹ️ Replay mode detected, upload skipped");
+            return { ok: true, status: "skipped" };
+        }
+        if (!isActivePlayer()) {
+            updateOverlayStatus("ℹ️ Upload skipped (spectator/replay mode)");
+            return { ok: true, status: "skipped_spectator" };
+        }
+        if (!shouldUploadRuns()) {
+            updateOverlayStatus("ℹ️ Upload skipped (toggle OFF)");
+            return { ok: true, status: "skipped" };
+        }
+
         const playerName = tagpro.playerId && tagpro.players[tagpro.playerId]
             ? tagpro.players[tagpro.playerId].name
             : "Unknown";
@@ -171,7 +268,7 @@
             return { ok: false, error: "Unexpected response" };
 
         } catch (err) {
-            console.error("Upload error:", err);
+            log("error", "Upload error:", err);
             updateOverlayStatus("❌ Upload request failed");
             return { ok: false, error: "Request failed" };
         }
@@ -185,8 +282,8 @@
         GM_addStyle(`
             #WR_HUD {
                 position: absolute;
-                top: 60px;
-                left: 20px;
+                top: ${localStorage.getItem("WR_HUD_top") || "120px"};
+                left: ${localStorage.getItem("WR_HUD_left") || "20px"};
                 padding: 6px 10px;
                 background: rgba(20,20,20,0.8);
                 border: 2px solid #4fa;
@@ -212,9 +309,10 @@
 
         $("body").append(`
             <div id="WR_HUD">
-                <h4>Speedrun WR</h4>
+                <h4>GLTP WR</h4>
                 <div id="WR_HUD_content">Loading fastest time...</div>
-                <span class="status" id="WR_HUD_status"></span>
+                <div id="WR_HUD_timer">Time: 0.000</div>
+                <div id="WR_HUD_status"></div>
             </div>
         `);
 
@@ -233,21 +331,52 @@
                 });
             }
         }).on("mouseup", function() {
+            if (isDragging) {
+                localStorage.setItem("WR_HUD_top", $("#WR_HUD").css("top"));
+                localStorage.setItem("WR_HUD_left", $("#WR_HUD").css("left"));
+            }
             isDragging = false;
         });
     }
 
     function showWRHUD(time, player) {
-        let formatted = time && time !== Infinity ? time.toFixed(2) + "s" : "N/A";
+        let formatted = time && time !== Infinity ? formatTime(time) : "N/A";
         $("#WR_HUD_content").html(`Fastest: <b>${formatted}</b> by ${player || "Unknown"}`);
     }
 
     function updateOverlayStatus(message) {
-        $("#WR_HUD_status").text(message);
+        const statusBox = $("#WR_HUD_status");
+        const line = $("<div>").text(message);
+        statusBox.append(line);
     }
+
 
     function removeOverlay() {
         $("#WR_HUD").remove();
+    }
+
+    let timerInterval = null;
+    let runStart = null;
+
+    function startTimerOverlay() {
+        stopTimerOverlay(); // clear any old loop
+
+        function tick() {
+            if (runStart) {
+                const elapsed = Math.floor(performance.now() - runStart);
+                $("#WR_HUD_timer").text("Time: " + formatTime(elapsed));
+                timerInterval = requestAnimationFrame(tick);
+            }
+        }
+
+        timerInterval = requestAnimationFrame(tick);
+    }
+
+    function stopTimerOverlay() {
+        if (timerInterval) {
+            cancelAnimationFrame(timerInterval);
+            timerInterval = null;
+        }
     }
 
     // -------------------------
@@ -277,85 +406,107 @@
     }
 
     // -------------------------
+    // Check Completion
+    // -------------------------
+    function checkCompletion(req) {
+        const capsToWin = parseInt(req.caps_to_win, 10);
+        const type = req.completion_type;
+        const allowBlueCaps = req.allow_blue_caps === true;
+
+        if (capsToWin <= 0) return false;
+
+        if (type === "individual") {
+            // Any single player reaching caps_to_win
+            for (const id in tagpro.players) {
+                const p = tagpro.players[id];
+                if (!p) continue;
+                if (p.team === 2 && !allowBlueCaps) continue; // skip blue if not allowed
+                const caps = p["s-captures"] || 0;
+                if (caps >= capsToWin) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        if (type === "combined") {
+            // Sum caps for teammates separately
+            let redTotal = 0, blueTotal = 0;
+            for (const id in tagpro.players) {
+                const p = tagpro.players[id];
+                if (!p) continue;
+                if (p.team === 1) redTotal += p["s-captures"] || 0;
+                if (p.team === 2 && allowBlueCaps) blueTotal += p["s-captures"] || 0;
+            }
+            if (redTotal >= capsToWin || blueTotal >= capsToWin) {
+                return true;
+            }
+            return false;
+        }
+
+        return false;
+    }
+
+    // -------------------------
     // MAIN FLOW
     // -------------------------
     tagpro.ready(async function() {
-        console.log("made it here");
         try {
             // Load both maps.json and wr.json, merge into mapConfig
             await loadConfigs();
         } catch (e) {
-            console.error("Failed to load configs", e);
+            log("error", "Failed to load configs", e);
             return; // bail out if configs can’t be loaded
         }
 
-        console.log("ok1");
         if (!isPrivateGroup()) return;
-        console.log("ok2");
         if (!isSpeedrunMap()) return;
-        console.log("ok3");
 
         initOverlay();
+        updateUploadToggleHUD(); // show initial toggle state in HUD
 
         const wrData = getFastestTime();
         fastestTime = wrData.fastestTime;
         wrHolder = wrData.player;
         showWRHUD(fastestTime, wrHolder);
 
-        let startTime = null;
-        let latestTime = null;
-        let capsTracker = { red: 0, blue: 0 };
-
         tagpro.socket.on('time', function(data) {
-            latestTime = data.time;
-            if (data.state === 3 && !startTime) {
-                startTime = data.time;
+            if (data.state === 1 && !runStart) {
+                runStart = performance.now(); // record wall‑clock start
+                startTimerOverlay();
             }
         });
 
         tagpro.socket.on('score', function(scoreUpdate) {
-            console.log("scored");
-            if (scoreUpdate.r > capsTracker.red) capsTracker.red = scoreUpdate.r;
-            if (scoreUpdate.b > capsTracker.blue) capsTracker.blue = scoreUpdate.b;
+            setTimeout(() => {
+                const req = getMapRequirement();
 
-            const req = getMapRequirement();
-            console.log("scored1");
+                if (checkCompletion(req)) {
+                    const runTime = Math.floor(performance.now() - runStart) //elapsed in ms
+                    stopTimerOverlay(); // freeze timer at final value
+                    updateOverlayStatus("✅ Run completed in " + formatTime(runTime));
 
-            let completed = false;
-            if (req.completion_type === "individual") {
-                console.log('scored2');
-                if (capsTracker.red >= req.caps_to_win || capsTracker.blue >= req.caps_to_win) {
-                    console.log('scored3');
-                    completed = true;
+                    uploadReplay(getReplayUUID(), runTime).then(response => {
+                        // Local WR estimate check
+                        if (fastestTime !== Infinity && runTime - 3 * 1000 <= fastestTime) {
+                            updateOverlayStatus("🌟 Might be a new WR!");
+                            showPixiTextAlert("Might be a new WR!", "#00ff00", "#ffffff", 64, 0, -200, 4000);
+                        } else {
+                            updateOverlayStatus("⚠️ Not a WR");
+                        }
+                    }).catch(err => {
+                        updateOverlayStatus("❌ Upload failed");
+                    });
                 }
-            } else if (req.completion_type === "combined") {
-                if ((capsTracker.red + capsTracker.blue) >= req.caps_to_win) {
-                    completed = true;
-                }
-            }
+            }, 150);
+        });
 
-            if (completed) {
-                console.log('scored5');
-                let runTime = (startTime - latestTime) / 1000;
-                updateOverlayStatus("Run completed in " + runTime.toFixed(2) + "s");
-
-                uploadReplay(getReplayUUID(), runTime).then(response => {
-                    if (response.newWR) {
-                        updateOverlayStatus("✅ New WR uploaded!");
-                        showPixiTextAlert("New WR!", "#00ff00", "#ffffff", 64, 0, -200, 2000);
-                        fastestTime = response.fastestTime;
-                        wrHolder = response.player;
-                        showWRHUD(fastestTime, wrHolder);
-                    } else {
-                        updateOverlayStatus("⚠️ Not a WR");
-                    }
-                }).catch(err => {
-                    updateOverlayStatus("❌ Upload failed");
-                });
-            }
+        tagpro.socket.on("end", function(data) {
+            stopTimerOverlay(); // freeze timer
         });
 
         tagpro.socket.on('disconnect', function() {
+            stopTimerOverlay();
             removeOverlay();
         });
     });
