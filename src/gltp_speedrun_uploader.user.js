@@ -11,7 +11,7 @@
 // @grant        GM_registerMenuCommand
 // @grant        GM_unregisterMenuCommand
 // @author       DAD.
-// @version      1.2
+// @version      1.21
 // ==/UserScript==
 
 /* globals tagpro, $, PIXI */
@@ -403,9 +403,9 @@ registerToggleCommand();
         if (txt) {
             const [mm, ss] = txt.split(":").map(Number);
             const elapsedMs = (mm * 60 + ss) * 1000;
-            runStart = performance.now() - elapsedMs;
+            runStart = performance.now();
             startTimerOverlay();
-            updateOverlayStatus("⏱ Synced to game clock: " + txt);
+            updateOverlayStatus("⏱ Start timer at game clock: " + txt);
         }
     }
 
