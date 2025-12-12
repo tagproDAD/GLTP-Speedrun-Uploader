@@ -11,7 +11,7 @@
 // @grant        GM_registerMenuCommand
 // @grant        GM_unregisterMenuCommand
 // @author       DAD.
-// @version      1.1
+// @version      1.2
 // ==/UserScript==
 
 /* globals tagpro, $, PIXI */
@@ -166,20 +166,25 @@ registerToggleCommand();
         return null;
     }
 
+    async function waitForMapId(maxRetries = 10, delayMs = 200) {
+        for (let i = 0; i < maxRetries; i++) {
+            const id = getCurrentMapId();
+            if (id) return id;
+            await new Promise(r => setTimeout(r, delayMs));
+        }
+        return null; // give up after retries
+    }
 
-    function isSpeedrunMap() {
-        const id = getCurrentMapId();
+    function isSpeedrunMap(id) {
         log("log", "map ID is: ", id);
         return id && !!mapConfig[id];
     }
 
-    function getMapRequirement() {
-        const id = getCurrentMapId();
+    function getMapRequirement(id) {
         return mapConfig[id] || { completion_type: "individual", caps_to_win: "1", allow_blue_caps: false };
     }
 
-    function getFastestTime() {
-        const id = getCurrentMapId();
+    function getFastestTime(id) {
         const entry = mapConfig[id];
         return entry ? { fastestTime: entry.fastestTime, player: entry.player } 
                     : { fastestTime: Infinity, player: "Unknown" };
@@ -488,7 +493,12 @@ registerToggleCommand();
             log("log", "Not a private group");
             return;
         }
-        if (!isSpeedrunMap()) {
+        const mapId = await waitForMapId();
+        if (!mapId) {
+            log("error", "Map ID not found after retries");
+            return;
+        }
+        if (!isSpeedrunMap(mapId)) {
             log("log", "Not a GLTP map");
             return;
         }
@@ -497,7 +507,7 @@ registerToggleCommand();
         log("log", "updating toggle");
         updateUploadToggleHUD(); // show initial toggle state in HUD
 
-        const wrData = getFastestTime();
+        const wrData = getFastestTime(mapId);
         fastestTime = wrData.fastestTime;
         wrHolder = wrData.player;
         showWRHUD(fastestTime, wrHolder);
@@ -519,7 +529,7 @@ registerToggleCommand();
         tagpro.socket.on('score', function(scoreUpdate) {
             log("log", "Score Socket");
             setTimeout(() => {
-                const req = getMapRequirement();
+                const req = getMapRequirement(mapId);
 
                 if (checkCompletion(req)) {
                     log("log", "Map Completed");
