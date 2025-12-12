@@ -606,6 +606,7 @@ function getFastestTime(id) {
         log("log", "updating toggle");
         updateUploadToggleHUD(); // show initial toggle state in HUD
 
+        let pbData = {}; // declare at top of tagpro.ready
         const wrData = getFastestTime(mapId);
         fastestTime = wrData.fastestTime;
         wrHolder    = wrData.playerTime;
@@ -618,7 +619,7 @@ function getFastestTime(id) {
         : "Unknown";
 
         if (playerName) {
-            const pbData = await loadPBs(playerName);
+            pbData = await loadPBs(playerName);
             if (pbData[mapId]) {
                 pbTime = pbData[mapId].fastestTime;
                 pbJumps = pbData[mapId].minJumps;
