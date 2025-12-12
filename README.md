@@ -9,6 +9,7 @@ A Tampermonkey userscript for [TagPro](https://tagpro.koalabeast.com) private gr
 
 ## Features
 - **WR HUD overlay**: Shows current world record time and holder.
+- **Least Jumps record**: Displays the minimum jumps achieved on the map and the player who set it.
 - **Live timer**: Speedrun‑style timer during runs. Syncs to game clock in joining mid game
 - **Replay upload**: Queues completed runs to the GLTP tracker (toggleable).
 - **Menu toggle**: Enable/disable uploads via Tampermonkey menu.
@@ -27,6 +28,7 @@ A Tampermonkey userscript for [TagPro](https://tagpro.koalabeast.com) private gr
 - The WR HUD will appear automatically.
 - Toggle uploads on/off via the Tampermonkey menu.
 - Completed runs are queued to the GLTP tracker unless uploads are disabled or you’re watching a replay.
+- If you refresh mid‑game, the timer will resume from the correct elapsed time thanks to persisted runStart.
 - Make sure this script is allowed in your league of play before using it
 
 ## HUD Overlay
@@ -41,3 +43,12 @@ turn this on/off to change if uploads happen automatically at the end of a run
 - TagPro wiki on mods and enhancements: [Quick Guide](https://www.reddit.com/r/TagPro/wiki/quickguide-mods-and-enhancements/)
 - GLTP speedrun website: [GLTP](https://bambitp.github.io/GLTP/)
 - Maps spreadsheet: [Speedrun Maps](https://docs.google.com/spreadsheets/d/1OnuTCekHKCD91W39jXBG4uveTCCyMxf9Ofead43MMCU/edit?gid=1775606307#gid=1775606307)
+
+
+## Changelog
+
+### v1.3
+- Added **Least Jumps record** to HUD overlay (shows minJumps and player_jumps from WR data). previous versions now broken
+- Fixed **duplicate upload issue**: now only one upload per run completion, even if more captures occur.
+- Implemented **persistent runStart storage** using absolute timestamps and UUID checks, so the timer resumes correctly after refresh.
+- Added logging lines to aid debugging.

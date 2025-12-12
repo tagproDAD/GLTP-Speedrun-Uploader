@@ -8,10 +8,11 @@
 // @grant        GM_addStyle
 // @grant        GM_getValue
 // @grant        GM_setValue
+// @grant        GM_deleteValue
 // @grant        GM_registerMenuCommand
 // @grant        GM_unregisterMenuCommand
 // @author       DAD.
-// @version      1.21
+// @version      1.3
 // ==/UserScript==
 
 /* globals tagpro, $, PIXI */
@@ -69,6 +70,33 @@ function registerToggleCommand() {
 
 // Call once at script load
 registerToggleCommand();
+
+// Simple persistence wrapper for Tampermonkey
+const State = {
+    set(key, value) {
+        try {
+            GM_setValue(key, value);
+        } catch (e) {
+            console.error("Failed to save state", key, e);
+        }
+    },
+    get(key, fallback = null) {
+        try {
+            return GM_getValue(key, fallback);
+        } catch (e) {
+            console.error("Failed to restore state", key, e);
+            return fallback;
+        }
+    },
+    remove(key) {
+        try {
+            GM_deleteValue(key);
+        } catch (e) {
+            console.error("Failed to delete state", key, e);
+        }
+    }
+};
+
 
 (function() {
     'use strict';
@@ -144,7 +172,9 @@ registerToggleCommand();
         for (const id in maps) {
             if (wrs[id]) {
                 maps[id].fastestTime = wrs[id].fastestTime;
-                maps[id].player = wrs[id].player;
+                maps[id].playerTime = wrs[id].player_time;
+                maps[id].minJumps = wrs[id].minJumps;
+                maps[id].playerJumps = wrs[id].player_jumps;
             }
         }
         mapConfig = maps;
@@ -184,11 +214,21 @@ registerToggleCommand();
         return mapConfig[id] || { completion_type: "individual", caps_to_win: "1", allow_blue_caps: false };
     }
 
-    function getFastestTime(id) {
-        const entry = mapConfig[id];
-        return entry ? { fastestTime: entry.fastestTime, player: entry.player } 
-                    : { fastestTime: Infinity, player: "Unknown" };
-    }
+function getFastestTime(id) {
+    const entry = mapConfig[id];
+    return entry ? {
+        fastestTime: entry.fastestTime,
+        playerTime: entry.playerTime,
+        minJumps: entry.minJumps,
+        playerJumps: entry.playerJumps
+    } : {
+        fastestTime: Infinity,
+        playerTime: "Unknown",
+        minJumps: Infinity,
+        playerJumps: "Unknown"
+    };
+}
+
 
 
     // -------------------------
@@ -346,10 +386,17 @@ registerToggleCommand();
         });
     }
 
-    function showWRHUD(time, player) {
-        let formatted = time && time !== Infinity ? formatTime(time) : "N/A";
-        $("#WR_HUD_content").html(`Fastest: <b>${formatted}</b> by ${player || "Unknown"}`);
+    function showWRHUD(time, player, minJumps, jumpPlayer) {
+        let formattedTime = time && time !== Infinity ? formatTime(time) : "N/A";
+        let formattedJumps = (minJumps !== undefined && minJumps !== Infinity) ? minJumps : "N/A";
+        let jumpLine = `Least Jumps: <b>${formattedJumps}</b> by ${jumpPlayer || "Unknown"}`;
+
+        $("#WR_HUD_content").html(`
+            ${jumpLine}<br>
+            Fastest: <b>${formattedTime}</b> by ${player || "Unknown"}
+        `);
     }
+
 
     function updateOverlayStatus(message) {
         const statusBox = $("#WR_HUD_status");
@@ -389,10 +436,15 @@ registerToggleCommand();
 
     function syncTimerFromUI() {
         log("log", "Syncing Timer");
+        if (restoreRunStart()) {
+            return; // already restored, no need to sync from UI
+        }
+
         // If overtime is active, anchor from extraTimeStartedAt
         if (tagpro.extraTimeStartedAt) {
             const elapsedOT = Date.now() - tagpro.extraTimeStartedAt;
             runStart = performance.now() - elapsedOT;
+            State.set("runStart", runStart); // <-- save only here
             startTimerOverlay();
             updateOverlayStatus("⏱ Synced to overtime: " + formatTime(elapsedOT));
             return;
@@ -407,6 +459,40 @@ registerToggleCommand();
             startTimerOverlay();
             updateOverlayStatus("⏱ Start timer at game clock: " + txt);
         }
+    }
+
+    function saveRunStart() {
+        const uuid = getReplayUUID();
+        if (uuid && runStart) {
+            const absoluteStart = Date.now() - (performance.now() - runStart);
+            State.set("runStartAbs", absoluteStart); // save absolute wall-clock start
+            State.set("runUUID", uuid);
+            log("log", "Saved runStartAbs for UUID:", uuid, absoluteStart);
+        }
+    }
+
+    function restoreRunStart() {
+        const savedAbs = State.get("runStartAbs", null);
+        const savedUUID = State.get("runUUID", null);
+        const currentUUID = getReplayUUID();
+
+        if (savedAbs && savedUUID && currentUUID === savedUUID) {
+            // Convert absolute wall-clock back into current performance.now() baseline
+            const elapsed = Date.now() - savedAbs;
+            runStart = performance.now() - elapsed;
+            startTimerOverlay();
+            updateOverlayStatus("⏱ Restored runStart from saved state");
+            log("log", "Restored runStart for UUID:", currentUUID, "elapsed:", elapsed);
+            return true;
+        }
+        log("log", "No valid runStart to restore");
+        return false;
+    }
+
+    function clearRunStart() {
+        State.remove("runStartAbs");
+        State.remove("runUUID");
+        log("log", "Cleared runStart state");
     }
 
     // -------------------------
@@ -509,8 +595,11 @@ registerToggleCommand();
 
         const wrData = getFastestTime(mapId);
         fastestTime = wrData.fastestTime;
-        wrHolder = wrData.player;
-        showWRHUD(fastestTime, wrHolder);
+        wrHolder    = wrData.playerTime;
+        const minJumps   = wrData.minJumps;
+        const jumpHolder = wrData.playerJumps;
+
+        showWRHUD(fastestTime, wrHolder, minJumps, jumpHolder);
 
         // If game already running when we join, sync immediately
         if (tagpro.state === 1 || tagpro.state === 5) {
@@ -522,17 +611,27 @@ registerToggleCommand();
             if (data.state === 1 && !runStart) {
                 log("log", "start of game");
                 runStart = performance.now(); // record wall‑clock start
+                saveRunStart();
                 startTimerOverlay();
             }
         });
 
+        let runCompleted = false; // global flag
+
         tagpro.socket.on('score', function(scoreUpdate) {
             log("log", "Score Socket");
+
+            // If we've already processed a completion, ignore further scores
+            if (runCompleted) {
+                return;
+            }
+
             setTimeout(() => {
                 const req = getMapRequirement(mapId);
 
                 if (checkCompletion(req)) {
                     log("log", "Map Completed");
+                    runCompleted = true;
                     const runTime = Math.floor(performance.now() - runStart) //elapsed in ms
                     stopTimerOverlay(); // freeze timer at final value
                     updateOverlayStatus("✅ Run completed in " + formatTime(runTime));
@@ -555,10 +654,12 @@ registerToggleCommand();
 
         tagpro.socket.on("end", function(data) {
             stopTimerOverlay(); // freeze timer
+            clearRunStart();
         });
 
         tagpro.socket.on('disconnect', function() {
             stopTimerOverlay();
+            clearRunStart();
             removeOverlay();
         });
     });
