@@ -11,7 +11,7 @@
 // @grant        GM_registerMenuCommand
 // @grant        GM_unregisterMenuCommand
 // @author       DAD.
-// @version      1.0
+// @version      1.1
 // ==/UserScript==
 
 /* globals tagpro, $, PIXI */
@@ -169,6 +169,7 @@ registerToggleCommand();
 
     function isSpeedrunMap() {
         const id = getCurrentMapId();
+        log("log", "map ID is: ", id);
         return id && !!mapConfig[id];
     }
 
@@ -279,6 +280,7 @@ registerToggleCommand();
     // HUD OVERLAY
     // -------------------------
     function initOverlay() {
+        log("log", "Initializing Overlay");
         GM_addStyle(`
             #WR_HUD {
                 position: absolute;
@@ -359,6 +361,7 @@ registerToggleCommand();
     let runStart = null;
 
     function startTimerOverlay() {
+        log("log", "Starting Timer");
         stopTimerOverlay(); // clear any old loop
 
         function tick() {
@@ -376,6 +379,28 @@ registerToggleCommand();
         if (timerInterval) {
             cancelAnimationFrame(timerInterval);
             timerInterval = null;
+        }
+    }
+
+    function syncTimerFromUI() {
+        log("log", "Syncing Timer");
+        // If overtime is active, anchor from extraTimeStartedAt
+        if (tagpro.extraTimeStartedAt) {
+            const elapsedOT = Date.now() - tagpro.extraTimeStartedAt;
+            runStart = performance.now() - elapsedOT;
+            startTimerOverlay();
+            updateOverlayStatus("⏱ Synced to overtime: " + formatTime(elapsedOT));
+            return;
+        }
+
+        // Otherwise, use the UI timer text
+        const txt = tagpro.ui.sprites.timer.text; // e.g. "01:12"
+        if (txt) {
+            const [mm, ss] = txt.split(":").map(Number);
+            const elapsedMs = (mm * 60 + ss) * 1000;
+            runStart = performance.now() - elapsedMs;
+            startTimerOverlay();
+            updateOverlayStatus("⏱ Synced to game clock: " + txt);
         }
     }
 
@@ -459,10 +484,17 @@ registerToggleCommand();
             return; // bail out if configs can’t be loaded
         }
 
-        if (!isPrivateGroup()) return;
-        if (!isSpeedrunMap()) return;
+        if (!isPrivateGroup()) {
+            log("log", "Not a private group");
+            return;
+        }
+        if (!isSpeedrunMap()) {
+            log("log", "Not a GLTP map");
+            return;
+        }
 
         initOverlay();
+        log("log", "updating toggle");
         updateUploadToggleHUD(); // show initial toggle state in HUD
 
         const wrData = getFastestTime();
@@ -470,18 +502,27 @@ registerToggleCommand();
         wrHolder = wrData.player;
         showWRHUD(fastestTime, wrHolder);
 
+        // If game already running when we join, sync immediately
+        if (tagpro.state === 1 || tagpro.state === 5) {
+            syncTimerFromUI();
+        }
+
         tagpro.socket.on('time', function(data) {
+            log("log", "Time Socket", data);
             if (data.state === 1 && !runStart) {
+                log("log", "start of game");
                 runStart = performance.now(); // record wall‑clock start
                 startTimerOverlay();
             }
         });
 
         tagpro.socket.on('score', function(scoreUpdate) {
+            log("log", "Score Socket");
             setTimeout(() => {
                 const req = getMapRequirement();
 
                 if (checkCompletion(req)) {
+                    log("log", "Map Completed");
                     const runTime = Math.floor(performance.now() - runStart) //elapsed in ms
                     stopTimerOverlay(); // freeze timer at final value
                     updateOverlayStatus("✅ Run completed in " + formatTime(runTime));
@@ -495,6 +536,7 @@ registerToggleCommand();
                             updateOverlayStatus("⚠️ Not a WR");
                         }
                     }).catch(err => {
+                        log("error", "Upload failed", err);
                         updateOverlayStatus("❌ Upload failed");
                     });
                 }

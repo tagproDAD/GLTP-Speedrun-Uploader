@@ -9,7 +9,7 @@ A Tampermonkey userscript for [TagPro](https://tagpro.koalabeast.com) private gr
 
 ## Features
 - **WR HUD overlay**: Shows current world record time and holder.
-- **Live timer**: Speedrun‑style timer during runs.
+- **Live timer**: Speedrun‑style timer during runs. Syncs to game clock in joining mid game
 - **Replay upload**: Queues completed runs to the GLTP tracker (toggleable).
 - **Menu toggle**: Enable/disable uploads via Tampermonkey menu.
 - **Replay‑safe**: Overlay works while watching replays and spectating, but uploads are skipped.
