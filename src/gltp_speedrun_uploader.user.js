@@ -12,7 +12,7 @@
 // @grant        GM_registerMenuCommand
 // @grant        GM_unregisterMenuCommand
 // @author       DAD.
-// @version      1.3
+// @version      1.4
 // ==/UserScript==
 
 /* globals tagpro, $, PIXI */
@@ -179,6 +179,17 @@ const State = {
         }
         mapConfig = maps;
     }
+
+    async function loadPBs(playerName) {
+        try {
+            const res = await fetchJSON(`https://gltp.fwotagprodad.workers.dev/pb/${encodeURIComponent(playerName)}`);
+            return res; // dictionary keyed by map_id
+        } catch (e) {
+            log("error", "Failed to load PBs", e);
+            return {};
+        }
+    }
+
 
     function isPrivateGroup() {
         if (tagpro.clientInfo && typeof tagpro.clientInfo.isPrivate !== "undefined") {
@@ -386,17 +397,19 @@ function getFastestTime(id) {
         });
     }
 
-    function showWRHUD(time, player, minJumps, jumpPlayer) {
+    function showWRHUD(time, player, minJumps, jumpPlayer, pbTime, pbJumps) {
         let formattedTime = time && time !== Infinity ? formatTime(time) : "N/A";
         let formattedJumps = (minJumps !== undefined && minJumps !== Infinity) ? minJumps : "N/A";
-        let jumpLine = `Least Jumps: <b>${formattedJumps}</b> by ${jumpPlayer || "Unknown"}`;
+        let formattedPBTime = pbTime && pbTime !== Infinity ? formatTime(pbTime) : "N/A";
+        let formattedPBJumps = (pbJumps !== undefined && pbJumps !== Infinity) ? pbJumps : "N/A";
 
         $("#WR_HUD_content").html(`
-            ${jumpLine}<br>
-            Fastest: <b>${formattedTime}</b> by ${player || "Unknown"}
+            Least Jumps (WR): <b>${formattedJumps}</b> by ${jumpPlayer || "Unknown"}<br>
+            Fastest Time (WR): <b>${formattedTime}</b> by ${player || "Unknown"}<br>
+            Your PB Time: <b>${formattedPBTime}</b><br>
+            Your PB Jumps: <b>${formattedPBJumps}</b><br>
         `);
     }
-
 
     function updateOverlayStatus(message) {
         const statusBox = $("#WR_HUD_status");
@@ -599,7 +612,27 @@ function getFastestTime(id) {
         const minJumps   = wrData.minJumps;
         const jumpHolder = wrData.playerJumps;
 
-        showWRHUD(fastestTime, wrHolder, minJumps, jumpHolder);
+        let pbTime = Infinity, pbJumps = Infinity;
+        const playerName = tagpro.playerId && tagpro.players[tagpro.playerId]
+        ? tagpro.players[tagpro.playerId].name
+        : "Unknown";
+
+        if (playerName) {
+            const pbData = await loadPBs(playerName);
+            if (pbData[mapId]) {
+                pbTime = pbData[mapId].fastestTime;
+                pbJumps = pbData[mapId].minJumps;
+            }
+        }
+
+        showWRHUD(
+            wrData.fastestTime,
+            wrData.playerTime,
+            wrData.minJumps,
+            wrData.playerJumps,
+            pbTime,
+            pbJumps
+        );
 
         // If game already running when we join, sync immediately
         if (tagpro.state === 1 || tagpro.state === 5) {
@@ -636,18 +669,34 @@ function getFastestTime(id) {
                     stopTimerOverlay(); // freeze timer at final value
                     updateOverlayStatus("✅ Run completed in " + formatTime(runTime));
 
-                    uploadReplay(getReplayUUID(), runTime).then(response => {
-                        // Local WR estimate check
-                        if (fastestTime !== Infinity && runTime - 3 * 1000 <= fastestTime) {
+                    uploadReplay(getReplayUUID(), runTime).then(async response => {
+                        // WR check
+                        if (fastestTime === Infinity) {
+                            // No WR exists yet
+                            updateOverlayStatus("🌟 Might be a new WR!");
+                            showPixiTextAlert("Might be a new WR!", "#00ff00", "#ffffff", 64, 0, -200, 4000);
+                        } else if (runTime - 3000 <= fastestTime) {
+                            // Within margin of existing WR
                             updateOverlayStatus("🌟 Might be a new WR!");
                             showPixiTextAlert("Might be a new WR!", "#00ff00", "#ffffff", 64, 0, -200, 4000);
                         } else {
                             updateOverlayStatus("⚠️ Not a WR");
                         }
+
+                        // PB check
+                        const pbTime = pbData[mapId]?.fastestTime ?? Infinity;
+                        if (pbTime === Infinity) {
+                            updateOverlayStatus("🎉 First completion!");
+                            showPixiTextAlert("First completion!", "#ffa500", "#ffffff", 64, 0, -250, 4000);
+                        } else if (runTime < pbTime) {
+                            updateOverlayStatus("🎉 New PB!");
+                            showPixiTextAlert("New PB!", "#00bfff", "#ffffff", 64, 0, -250, 4000);
+                        }
                     }).catch(err => {
                         log("error", "Upload failed", err);
                         updateOverlayStatus("❌ Upload failed");
                     });
+
                 }
             }, 150);
         });
